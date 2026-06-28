@@ -12,9 +12,9 @@ The app and API server live in the private `owainlewis/passage.md` repo.
 
 This is an early Phase 2 CLI.
 
-It currently supports local auth config, help, and version output.
+It currently supports local auth config, core document commands, help, and version output.
 
-Document commands, sharing, and raw Markdown URLs are tracked in later Phase 2 issues.
+Sharing and raw Markdown URLs are tracked in later Phase 2 issues.
 
 ## Development
 
@@ -41,6 +41,13 @@ Run locally:
 ./passage login
 ./passage auth status
 ./passage auth status --check
+./passage new "Draft"
+./passage list
+./passage cat <doc-id>
+./passage pull <doc-id>
+./passage push <doc-id> ./draft.md
+./passage append <doc-id> ./notes.md
+./passage replace <doc-id> ./draft.md
 ./passage version
 ```
 
@@ -52,12 +59,26 @@ Environment variables override saved config:
 PASSAGE_API_URL=http://localhost:8080 PASSAGE_TOKEN=psg_example ./passage auth status
 ```
 
+Use `--json` with document commands when scripts need structured output:
+
+```sh
+./passage list --json
+./passage cat --json <doc-id>
+```
+
 ## Commands
 
 ```text
 passage login
 passage auth status
 passage auth status --check
+passage new "Draft"
+passage list
+passage cat <doc-id>
+passage pull <doc-id>
+passage push <doc-id> <file>
+passage append <doc-id> <file>
+passage replace <doc-id> <file>
 passage help
 passage version
 passage --version

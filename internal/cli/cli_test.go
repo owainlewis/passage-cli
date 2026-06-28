@@ -2,11 +2,16 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/owainlewis/passage-cli/internal/config"
 )
 
 func TestRunShowsHelpByDefault(t *testing.T) {
@@ -180,6 +185,186 @@ func TestRunAuthStatusFailsWithoutToken(t *testing.T) {
 	if !strings.Contains(stderr.String(), "Not authenticated") {
 		t.Fatalf("stderr = %s", stderr.String())
 	}
+}
+
+func TestRunDocumentCommands(t *testing.T) {
+	dir := t.TempDir()
+	if err := config.Save(dir, config.Config{APIURL: "http://passage.test", Token: "psg_test"}); err != nil {
+		t.Fatal(err)
+	}
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		if r.Header.Get("Authorization") != "Bearer psg_test" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/docs":
+			var input map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Fatal(err)
+			}
+			if input["body"] != "# Draft\n" {
+				t.Fatalf("create body = %q", input["body"])
+			}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{"id":"11111111-1111-1111-1111-111111111111","title":"Draft","body":"# Draft\n","createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/docs":
+			_, _ = io.WriteString(w, `{"documents":[{"id":"11111111-1111-1111-1111-111111111111","title":"Draft","body":"# Draft\n","createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}]}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/docs/11111111-1111-1111-1111-111111111111":
+			_, _ = io.WriteString(w, `{"id":"11111111-1111-1111-1111-111111111111","title":"Draft","body":"# Draft","createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}`)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/docs/11111111-1111-1111-1111-111111111111":
+			var input map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(input["body"], "More") && !strings.Contains(input["body"], "Pushed") && !strings.Contains(input["body"], "Replaced") {
+				t.Fatalf("update body = %q", input["body"])
+			}
+			_, _ = io.WriteString(w, `{"id":"11111111-1111-1111-1111-111111111111","title":"Draft","body":"`+strings.ReplaceAll(input["body"], "\n", "\\n")+`","createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:01:00Z"}`)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	if err := config.Save(dir, config.Config{APIURL: server.URL, Token: "psg_test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	newOut := runCommand(t, []string{"new", "Draft"}, dir, server.Client())
+	if !strings.Contains(newOut, "Created 11111111-1111-1111-1111-111111111111") {
+		t.Fatalf("new output = %s", newOut)
+	}
+	listOut := runCommand(t, []string{"list"}, dir, server.Client())
+	if !strings.Contains(listOut, "Draft") {
+		t.Fatalf("list output = %s", listOut)
+	}
+	catOut := runCommand(t, []string{"cat", "11111111-1111-1111-1111-111111111111"}, dir, server.Client())
+	if catOut != "# Draft" {
+		t.Fatalf("cat output = %q", catOut)
+	}
+	pullOut := runCommand(t, []string{"pull", "11111111-1111-1111-1111-111111111111"}, dir, server.Client())
+	if pullOut != "# Draft" {
+		t.Fatalf("pull output = %q", pullOut)
+	}
+	file := filepath.Join(t.TempDir(), "append.md")
+	if err := os.WriteFile(file, []byte("More\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	appendOut := runCommand(t, []string{"append", "11111111-1111-1111-1111-111111111111", file}, dir, server.Client())
+	if !strings.Contains(appendOut, "Updated 11111111-1111-1111-1111-111111111111") {
+		t.Fatalf("append output = %s", appendOut)
+	}
+	pushFile := filepath.Join(t.TempDir(), "push.md")
+	if err := os.WriteFile(pushFile, []byte("Pushed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pushOut := runCommand(t, []string{"push", "11111111-1111-1111-1111-111111111111", pushFile}, dir, server.Client())
+	if !strings.Contains(pushOut, "Updated 11111111-1111-1111-1111-111111111111") {
+		t.Fatalf("push output = %s", pushOut)
+	}
+	replaceFile := filepath.Join(t.TempDir(), "replace.md")
+	if err := os.WriteFile(replaceFile, []byte("Replaced\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	replaceOut := runCommand(t, []string{"replace", "11111111-1111-1111-1111-111111111111", replaceFile}, dir, server.Client())
+	if !strings.Contains(replaceOut, "Updated 11111111-1111-1111-1111-111111111111") {
+		t.Fatalf("replace output = %s", replaceOut)
+	}
+	if len(requests) == 0 {
+		t.Fatal("no requests recorded")
+	}
+}
+
+func TestRunDocumentCommandsJSON(t *testing.T) {
+	dir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"documents":[{"id":"doc-1","title":"One","body":"# One\n","createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}]}`)
+	}))
+	defer server.Close()
+	if err := config.Save(dir, config.Config{APIURL: server.URL, Token: "psg_test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := runCommand(t, []string{"list", "--json"}, dir, server.Client())
+	var parsed struct {
+		Documents []struct {
+			ID string `json:"id"`
+		} `json:"documents"`
+	}
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("invalid json %q: %v", out, err)
+	}
+	if len(parsed.Documents) != 1 || parsed.Documents[0].ID != "doc-1" {
+		t.Fatalf("parsed = %#v", parsed)
+	}
+}
+
+func TestRunDocumentCommandsMissingAuthFails(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := RunWithRuntime([]string{"list"}, Runtime{
+		Stdout:    &stdout,
+		Stderr:    &stderr,
+		ConfigDir: t.TempDir(),
+		Env:       map[string]string{},
+		Build:     BuildInfo{Version: "test"},
+	})
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "Not authenticated") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
+func TestRunDocumentCommandsReportAPIErrors(t *testing.T) {
+	dir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"error":"document not found"}`)
+	}))
+	defer server.Close()
+	if err := config.Save(dir, config.Config{APIURL: server.URL, Token: "psg_test"}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := RunWithRuntime([]string{"cat", "missing"}, Runtime{
+		Stdout:    &stdout,
+		Stderr:    &stderr,
+		ConfigDir: dir,
+		Env:       map[string]string{},
+		HTTP:      server.Client(),
+		Build:     BuildInfo{Version: "test"},
+	})
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "document not found") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
+func runCommand(t *testing.T, args []string, dir string, client *http.Client) string {
+	t.Helper()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := RunWithRuntime(args, Runtime{
+		Stdout:    &stdout,
+		Stderr:    &stderr,
+		ConfigDir: dir,
+		Env:       map[string]string{},
+		HTTP:      client,
+		Build:     BuildInfo{Version: "test"},
+	})
+	if code != 0 {
+		t.Fatalf("%v code = %d, stderr = %s", args, code, stderr.String())
+	}
+	return stdout.String()
 }
 
 func TestRunShowsVersion(t *testing.T) {
