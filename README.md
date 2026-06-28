@@ -12,9 +12,7 @@ The app and API server live in the private `owainlewis/passage.md` repo.
 
 This is an early Phase 2 CLI.
 
-It currently supports local auth config, core document commands, help, and version output.
-
-Sharing and raw Markdown URLs are tracked in later Phase 2 issues.
+It currently supports local auth config, document commands, sharing commands, help, and version output.
 
 ## Development
 
@@ -48,6 +46,9 @@ Run locally:
 ./passage push <doc-id> ./draft.md
 ./passage append <doc-id> ./notes.md
 ./passage replace <doc-id> ./draft.md
+./passage share <doc-id>
+./passage raw <doc-id>
+./passage unshare <doc-id>
 ./passage version
 ```
 
@@ -64,7 +65,13 @@ Use `--json` with document commands when scripts need structured output:
 ```sh
 ./passage list --json
 ./passage cat --json <doc-id>
+./passage share --json <doc-id>
+./passage raw --json <doc-id>
 ```
+
+Share output includes both `html_url` and `raw_url`.
+
+Raw Markdown URLs are public to anyone with the link until you run `passage unshare <doc-id>`.
 
 ## Commands
 
@@ -79,6 +86,9 @@ passage pull <doc-id>
 passage push <doc-id> <file>
 passage append <doc-id> <file>
 passage replace <doc-id> <file>
+passage share <doc-id>
+passage raw <doc-id>
+passage unshare <doc-id>
 passage help
 passage version
 passage --version
