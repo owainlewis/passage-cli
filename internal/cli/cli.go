@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/owainlewis/passage-cli/internal/api"
 	"github.com/owainlewis/passage-cli/internal/config"
 )
 
@@ -77,6 +78,18 @@ func RunWithRuntime(args []string, rt Runtime) int {
 		return runLogin(rt)
 	case "auth":
 		return runAuth(args[1:], rt)
+	case "new":
+		return runNew(args[1:], rt)
+	case "list":
+		return runList(args[1:], rt)
+	case "cat":
+		return runCat("cat", args[1:], rt)
+	case "pull":
+		return runCat("pull", args[1:], rt)
+	case "push", "replace":
+		return runReplace(args[0], args[1:], rt)
+	case "append":
+		return runAppend(args[1:], rt)
 	case "version", "-v", "--version":
 		printVersion(rt.Stdout, rt.Build)
 		return 0
@@ -85,6 +98,182 @@ func RunWithRuntime(args []string, rt Runtime) int {
 		fmt.Fprintf(rt.Stderr, "Run `%s help` for usage.\n", appName)
 		return 1
 	}
+}
+
+func runNew(args []string, rt Runtime) int {
+	jsonOut, args := parseJSONFlag(args)
+	if len(args) != 1 {
+		fmt.Fprintf(rt.Stderr, "%s: usage: passage new [--json] \"Title\"\n", appName)
+		return 1
+	}
+	title := strings.TrimSpace(args[0])
+	if title == "" {
+		fmt.Fprintf(rt.Stderr, "%s: title is required\n", appName)
+		return 1
+	}
+	client, err := documentClient(rt)
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	doc, err := client.Create("# " + title + "\n")
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	return printDocumentResult(rt.Stdout, doc, jsonOut, "Created")
+}
+
+func runList(args []string, rt Runtime) int {
+	jsonOut, args := parseJSONFlag(args)
+	if len(args) != 0 {
+		fmt.Fprintf(rt.Stderr, "%s: usage: passage list [--json]\n", appName)
+		return 1
+	}
+	client, err := documentClient(rt)
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	docs, err := client.List()
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	if jsonOut {
+		return printJSON(rt.Stdout, map[string][]api.Document{"documents": docs})
+	}
+	for _, doc := range docs {
+		fmt.Fprintf(rt.Stdout, "%s\t%s\t%s\n", doc.ID, doc.UpdatedAt.Format("2006-01-02 15:04"), doc.Title)
+	}
+	return 0
+}
+
+func runCat(command string, args []string, rt Runtime) int {
+	jsonOut, args := parseJSONFlag(args)
+	if len(args) != 1 {
+		fmt.Fprintf(rt.Stderr, "%s: usage: passage %s [--json] <doc>\n", appName, command)
+		return 1
+	}
+	client, err := documentClient(rt)
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	doc, err := client.Get(args[0])
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	if jsonOut {
+		return printJSON(rt.Stdout, doc)
+	}
+	fmt.Fprint(rt.Stdout, doc.Body)
+	return 0
+}
+
+func runReplace(command string, args []string, rt Runtime) int {
+	jsonOut, args := parseJSONFlag(args)
+	if len(args) != 2 {
+		fmt.Fprintf(rt.Stderr, "%s: usage: passage %s [--json] <doc> <file>\n", appName, command)
+		return 1
+	}
+	body, err := os.ReadFile(args[1])
+	if err != nil {
+		fmt.Fprintf(rt.Stderr, "%s: %v\n", appName, err)
+		return 1
+	}
+	client, err := documentClient(rt)
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	doc, err := client.Update(args[0], string(body))
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	return printDocumentResult(rt.Stdout, doc, jsonOut, "Updated")
+}
+
+func runAppend(args []string, rt Runtime) int {
+	jsonOut, args := parseJSONFlag(args)
+	if len(args) != 2 {
+		fmt.Fprintf(rt.Stderr, "%s: usage: passage append [--json] <doc> <file>\n", appName)
+		return 1
+	}
+	addition, err := os.ReadFile(args[1])
+	if err != nil {
+		fmt.Fprintf(rt.Stderr, "%s: %v\n", appName, err)
+		return 1
+	}
+	client, err := documentClient(rt)
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	existing, err := client.Get(args[0])
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	body := existing.Body
+	if body != "" && !strings.HasSuffix(body, "\n") {
+		body += "\n"
+	}
+	body += string(addition)
+	doc, err := client.Update(args[0], body)
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	return printDocumentResult(rt.Stdout, doc, jsonOut, "Updated")
+}
+
+func documentClient(rt Runtime) (api.Client, error) {
+	loaded, err := config.Load(rt.ConfigDir, rt.Env)
+	if err != nil {
+		return api.Client{}, err
+	}
+	return api.Client{BaseURL: loaded.Config.APIURL, Token: loaded.Config.Token, HTTP: rt.HTTP}, nil
+}
+
+func parseJSONFlag(args []string) (bool, []string) {
+	var out []string
+	jsonOut := false
+	for _, arg := range args {
+		if arg == "--json" {
+			jsonOut = true
+			continue
+		}
+		out = append(out, arg)
+	}
+	return jsonOut, out
+}
+
+func printDocumentResult(w io.Writer, doc api.Document, jsonOut bool, verb string) int {
+	if jsonOut {
+		return printJSON(w, doc)
+	}
+	fmt.Fprintf(w, "%s %s\t%s\n", verb, doc.ID, doc.Title)
+	return 0
+}
+
+func printJSON(w io.Writer, value any) int {
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
+		return 1
+	}
+	return 0
+}
+
+func printCommandError(w io.Writer, err error) {
+	if err.Error() == "not authenticated" {
+		fmt.Fprintln(w, "Not authenticated. Run `passage login` or set PASSAGE_TOKEN.")
+		return
+	}
+	fmt.Fprintf(w, "%s: %v\n", appName, err)
 }
 
 func runLogin(rt Runtime) int {
@@ -209,6 +398,13 @@ Usage:
 Commands:
   login     Save API URL and token.
   auth      Show auth status.
+  new       Create a document.
+  list      List documents.
+  cat       Print a document body.
+  pull      Print a document body.
+  push      Replace a document body from a file.
+  append    Append file content to a document.
+  replace   Replace a document body from a file.
   help      Show this help.
   version   Show build version.
 
