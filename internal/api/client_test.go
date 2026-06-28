@@ -52,6 +52,42 @@ func TestClientReturnsAPIError(t *testing.T) {
 	}
 }
 
+func TestClientSharesAndUnsharesDocument(t *testing.T) {
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		if r.Header.Get("Authorization") != "Bearer psg_test" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/docs/doc-1/share":
+			_, _ = w.Write([]byte(`{"token":"sharetoken","htmlPath":"/d/sharetoken","markdownPath":"/d/sharetoken.md"}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/docs/doc-1/share":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := Client{BaseURL: server.URL, Token: "psg_test", HTTP: server.Client()}
+	share, err := client.Share("doc-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if share.HTMLPath != "/d/sharetoken" || share.MarkdownPath != "/d/sharetoken.md" {
+		t.Fatalf("share = %#v", share)
+	}
+	if err := client.Unshare("doc-1"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"POST /api/v1/docs/doc-1/share", "DELETE /api/v1/docs/doc-1/share"}
+	if strings.Join(requests, ",") != strings.Join(want, ",") {
+		t.Fatalf("requests = %#v", requests)
+	}
+}
+
 func TestClientRequiresToken(t *testing.T) {
 	_, err := Client{BaseURL: "http://example.test"}.List()
 	if err == nil || !strings.Contains(err.Error(), "not authenticated") {

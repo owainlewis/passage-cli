@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -90,6 +91,12 @@ func RunWithRuntime(args []string, rt Runtime) int {
 		return runReplace(args[0], args[1:], rt)
 	case "append":
 		return runAppend(args[1:], rt)
+	case "share":
+		return runShare(args[1:], rt)
+	case "raw":
+		return runRaw(args[1:], rt)
+	case "unshare":
+		return runUnshare(args[1:], rt)
 	case "version", "-v", "--version":
 		printVersion(rt.Stdout, rt.Build)
 		return 0
@@ -230,12 +237,115 @@ func runAppend(args []string, rt Runtime) int {
 	return printDocumentResult(rt.Stdout, doc, jsonOut, "Updated")
 }
 
+func runShare(args []string, rt Runtime) int {
+	jsonOut, args := parseJSONFlag(args)
+	if len(args) != 1 {
+		fmt.Fprintf(rt.Stderr, "%s: usage: passage share [--json] <doc>\n", appName)
+		return 1
+	}
+	client, err := documentClient(rt)
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	out, err := shareDocument(client, args[0])
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	if jsonOut {
+		return printJSON(rt.Stdout, out)
+	}
+	fmt.Fprintf(rt.Stdout, "Shared %s\n", out.DocID)
+	fmt.Fprintf(rt.Stdout, "HTML: %s\n", out.HTMLURL)
+	fmt.Fprintf(rt.Stdout, "Raw: %s\n", out.RawURL)
+	return 0
+}
+
+func runRaw(args []string, rt Runtime) int {
+	jsonOut, args := parseJSONFlag(args)
+	if len(args) != 1 {
+		fmt.Fprintf(rt.Stderr, "%s: usage: passage raw [--json] <doc>\n", appName)
+		return 1
+	}
+	client, err := documentClient(rt)
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	out, err := shareDocument(client, args[0])
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	if jsonOut {
+		return printJSON(rt.Stdout, out)
+	}
+	fmt.Fprintln(rt.Stdout, out.RawURL)
+	return 0
+}
+
+func runUnshare(args []string, rt Runtime) int {
+	jsonOut, args := parseJSONFlag(args)
+	if len(args) != 1 {
+		fmt.Fprintf(rt.Stderr, "%s: usage: passage unshare [--json] <doc>\n", appName)
+		return 1
+	}
+	client, err := documentClient(rt)
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	if err := client.Unshare(args[0]); err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	if jsonOut {
+		return printJSON(rt.Stdout, map[string]any{"doc_id": args[0], "unshared": true})
+	}
+	fmt.Fprintf(rt.Stdout, "Unshared %s\n", args[0])
+	return 0
+}
+
 func documentClient(rt Runtime) (api.Client, error) {
 	loaded, err := config.Load(rt.ConfigDir, rt.Env)
 	if err != nil {
 		return api.Client{}, err
 	}
 	return api.Client{BaseURL: loaded.Config.APIURL, Token: loaded.Config.Token, HTTP: rt.HTTP}, nil
+}
+
+func shareDocument(client api.Client, docID string) (shareOutput, error) {
+	share, err := client.Share(docID)
+	if err != nil {
+		return shareOutput{}, err
+	}
+	htmlURL, err := absoluteURL(client.BaseURL, share.HTMLPath)
+	if err != nil {
+		return shareOutput{}, err
+	}
+	rawURL, err := absoluteURL(client.BaseURL, share.MarkdownPath)
+	if err != nil {
+		return shareOutput{}, err
+	}
+	return shareOutput{
+		DocID:   docID,
+		Token:   share.Token,
+		HTMLURL: htmlURL,
+		RawURL:  rawURL,
+	}, nil
+}
+
+func absoluteURL(baseURL string, path string) (string, error) {
+	base, err := url.Parse(strings.TrimRight(baseURL, "/") + "/")
+	if err != nil {
+		return "", err
+	}
+	rel, err := url.Parse(path)
+	if err != nil {
+		return "", err
+	}
+	return base.ResolveReference(rel).String(), nil
 }
 
 func parseJSONFlag(args []string) (bool, []string) {
@@ -405,10 +515,11 @@ Commands:
   push      Replace a document body from a file.
   append    Append file content to a document.
   replace   Replace a document body from a file.
+  share     Share a document and print public URLs.
+  raw       Share a document and print the raw Markdown URL.
+  unshare   Revoke public access for a document.
   help      Show this help.
   version   Show build version.
-
-More commands are coming in the Phase 2 agent access work.
 `)+"\n")
 }
 
@@ -430,4 +541,11 @@ type meResponse struct {
 type meUser struct {
 	ID    string `json:"id"`
 	Email string `json:"email"`
+}
+
+type shareOutput struct {
+	DocID   string `json:"doc_id"`
+	Token   string `json:"token"`
+	HTMLURL string `json:"html_url"`
+	RawURL  string `json:"raw_url"`
 }

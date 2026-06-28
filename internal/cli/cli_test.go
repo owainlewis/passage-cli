@@ -302,6 +302,75 @@ func TestRunDocumentCommandsJSON(t *testing.T) {
 	}
 }
 
+func TestRunSharingCommands(t *testing.T) {
+	dir := t.TempDir()
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		if r.Header.Get("Authorization") != "Bearer psg_test" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/docs/doc-1/share":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"token":"sharetoken","htmlPath":"/d/sharetoken","markdownPath":"/d/sharetoken.md"}`)
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/docs/doc-1/share":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	if err := config.Save(dir, config.Config{APIURL: server.URL, Token: "psg_test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	shareOut := runCommand(t, []string{"share", "doc-1"}, dir, server.Client())
+	if !strings.Contains(shareOut, "Shared doc-1") {
+		t.Fatalf("share output = %s", shareOut)
+	}
+	if !strings.Contains(shareOut, "HTML: "+server.URL+"/d/sharetoken") {
+		t.Fatalf("share output = %s", shareOut)
+	}
+	if !strings.Contains(shareOut, "Raw: "+server.URL+"/d/sharetoken.md") {
+		t.Fatalf("share output = %s", shareOut)
+	}
+
+	shareJSONOut := runCommand(t, []string{"share", "--json", "doc-1"}, dir, server.Client())
+	assertShareJSON(t, shareJSONOut, server.URL)
+
+	rawOut := runCommand(t, []string{"raw", "doc-1"}, dir, server.Client())
+	if strings.TrimSpace(rawOut) != server.URL+"/d/sharetoken.md" {
+		t.Fatalf("raw output = %s", rawOut)
+	}
+
+	jsonOut := runCommand(t, []string{"raw", "--json", "doc-1"}, dir, server.Client())
+	assertShareJSON(t, jsonOut, server.URL)
+	unshareOut := runCommand(t, []string{"unshare", "doc-1"}, dir, server.Client())
+	if strings.TrimSpace(unshareOut) != "Unshared doc-1" {
+		t.Fatalf("unshare output = %s", unshareOut)
+	}
+	if !strings.Contains(strings.Join(requests, "\n"), "DELETE /api/v1/docs/doc-1/share") {
+		t.Fatalf("requests = %#v", requests)
+	}
+}
+
+func assertShareJSON(t *testing.T, out string, baseURL string) {
+	t.Helper()
+	var parsed struct {
+		DocID   string `json:"doc_id"`
+		Token   string `json:"token"`
+		HTMLURL string `json:"html_url"`
+		RawURL  string `json:"raw_url"`
+	}
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("invalid json %q: %v", out, err)
+	}
+	if parsed.DocID != "doc-1" || parsed.Token != "sharetoken" || parsed.HTMLURL != baseURL+"/d/sharetoken" || parsed.RawURL != baseURL+"/d/sharetoken.md" {
+		t.Fatalf("parsed = %#v", parsed)
+	}
+}
+
 func TestRunDocumentCommandsMissingAuthFails(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

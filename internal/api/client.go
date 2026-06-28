@@ -28,6 +28,12 @@ type Document struct {
 	ArchivedAt *time.Time `json:"archivedAt,omitempty"`
 }
 
+type Share struct {
+	Token        string `json:"token"`
+	HTMLPath     string `json:"htmlPath"`
+	MarkdownPath string `json:"markdownPath"`
+}
+
 func (c Client) List() ([]Document, error) {
 	var out struct {
 		Documents []Document `json:"documents"`
@@ -57,6 +63,16 @@ func (c Client) Update(id string, body string) (Document, error) {
 	var doc Document
 	err := c.do(http.MethodPatch, "/api/v1/docs/"+id, map[string]string{"body": body}, &doc)
 	return doc, err
+}
+
+func (c Client) Share(id string) (Share, error) {
+	var share Share
+	err := c.do(http.MethodPost, "/api/v1/docs/"+id+"/share", nil, &share)
+	return share, err
+}
+
+func (c Client) Unshare(id string) error {
+	return c.do(http.MethodDelete, "/api/v1/docs/"+id+"/share", nil, nil)
 }
 
 func (c Client) do(method string, path string, input any, output any) error {
