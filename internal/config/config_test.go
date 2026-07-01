@@ -102,12 +102,29 @@ func TestLoadRejectsInvalidJSON(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := Load(dir, map[string]string{})
 	if err == nil {
 		t.Fatal("Load accepted invalid JSON")
+	}
+}
+
+func TestDefaultDirUsesPassageHomeDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir, err := DefaultDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, ".passage")
+	if dir != want {
+		t.Fatalf("dir = %q, want %q", dir, want)
+	}
+	if Path(dir) != filepath.Join(home, ".passage", "auth.json") {
+		t.Fatalf("path = %q", Path(dir))
 	}
 }
 

@@ -82,7 +82,7 @@ Run locally:
 ./passage version
 ```
 
-Config is stored in your user config directory at `passage/config.json`.
+Auth config is stored at `~/.passage/auth.json`.
 
 Environment variables override saved config:
 

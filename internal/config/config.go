@@ -34,15 +34,15 @@ type LoadResult struct {
 }
 
 func DefaultDir() (string, error) {
-	dir, err := os.UserConfigDir()
+	dir, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "passage"), nil
+	return filepath.Join(dir, ".passage"), nil
 }
 
 func Path(dir string) string {
-	return filepath.Join(dir, "config.json")
+	return filepath.Join(dir, "auth.json")
 }
 
 func Load(dir string, env map[string]string) (LoadResult, error) {
