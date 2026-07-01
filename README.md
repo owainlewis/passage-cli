@@ -14,6 +14,36 @@ This is an early Phase 2 CLI.
 
 It currently supports local auth config, document commands, sharing commands, help, and version output.
 
+## Install
+
+Install the latest release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/owainlewis/passage-cli/main/install.sh | bash
+```
+
+Install a specific version:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/owainlewis/passage-cli/main/install.sh | env PASSAGE_VERSION=v0.1.0 bash
+```
+
+The installer supports macOS and Linux on `amd64` and `arm64`.
+
+By default, it installs to `/usr/local/bin` when writable, otherwise `~/.local/bin`.
+
+Set `PASSAGE_INSTALL_DIR` to choose another directory.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/owainlewis/passage-cli/main/install.sh | env PASSAGE_INSTALL_DIR="$HOME/bin" bash
+```
+
+Verify:
+
+```sh
+passage version
+```
+
 ## Development
 
 Requirements:
@@ -117,3 +147,5 @@ The release workflow builds these archive names:
 Each archive has a matching `.sha256` checksum file.
 
 Homebrew tap support is out of scope for the MVP.
+
+See [docs/release.md](docs/release.md) for the full release process.

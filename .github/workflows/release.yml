@@ -79,10 +79,10 @@ jobs:
           name="passage_${VERSION}_${GOOS}_${GOARCH}"
           if [ "$ARCHIVE" = "zip" ]; then
             (cd package && zip -q "../dist/${name}.zip" "$binary")
-            shasum -a 256 "dist/${name}.zip" > "dist/${name}.zip.sha256"
+            (cd dist && shasum -a 256 "${name}.zip" > "${name}.zip.sha256")
           else
             tar -czf "dist/${name}.tar.gz" -C package "$binary"
-            shasum -a 256 "dist/${name}.tar.gz" > "dist/${name}.tar.gz.sha256"
+            (cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256")
           fi
 
       - uses: actions/upload-artifact@v4
@@ -97,12 +97,33 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
+      - name: Check for release notes
+        id: notes
+        run: |
+          set -euo pipefail
+          notes=".github/release-notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$notes" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "path=$notes" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: softprops/action-gh-release@v2
+        if: steps.notes.outputs.exists == 'true'
         with:
           files: dist/*
+          body_path: ${{ steps.notes.outputs.path }}
 
+      - uses: softprops/action-gh-release@v2
+        if: steps.notes.outputs.exists != 'true'
+        with:
+          files: dist/*
+          generate_release_notes: true
