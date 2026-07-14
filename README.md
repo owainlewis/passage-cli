@@ -76,6 +76,7 @@ Run locally:
 ./passage push <doc-id> ./draft.md
 ./passage append <doc-id> ./notes.md
 ./passage replace <doc-id> ./draft.md
+./passage delete <doc-id>
 ./passage share <doc-id>
 ./passage raw <doc-id>
 ./passage unshare <doc-id>
@@ -95,6 +96,7 @@ Use `--json` with document commands when scripts need structured output:
 ```sh
 ./passage list --json
 ./passage cat --json <doc-id>
+./passage delete --json <doc-id>
 ./passage share --json <doc-id>
 ./passage raw --json <doc-id>
 ```
@@ -116,6 +118,7 @@ passage pull <doc-id>
 passage push <doc-id> <file>
 passage append <doc-id> <file>
 passage replace <doc-id> <file>
+passage delete <doc-id>
 passage share <doc-id>
 passage raw <doc-id>
 passage unshare <doc-id>
