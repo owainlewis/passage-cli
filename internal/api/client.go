@@ -65,6 +65,10 @@ func (c Client) Update(id string, body string) (Document, error) {
 	return doc, err
 }
 
+func (c Client) Delete(id string) error {
+	return c.do(http.MethodDelete, "/api/v1/docs/"+id, nil, nil)
+}
+
 func (c Client) Share(id string) (Share, error) {
 	var share Share
 	err := c.do(http.MethodPost, "/api/v1/docs/"+id+"/share", nil, &share)

@@ -88,6 +88,24 @@ func TestClientSharesAndUnsharesDocument(t *testing.T) {
 	}
 }
 
+func TestClientDeletesDocument(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer psg_test" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/v1/docs/doc-1" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client := Client{BaseURL: server.URL, Token: "psg_test", HTTP: server.Client()}
+	if err := client.Delete("doc-1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestClientRequiresToken(t *testing.T) {
 	_, err := Client{BaseURL: "http://example.test"}.List()
 	if err == nil || !strings.Contains(err.Error(), "not authenticated") {

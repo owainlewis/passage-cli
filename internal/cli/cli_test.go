@@ -302,6 +302,84 @@ func TestRunDocumentCommandsJSON(t *testing.T) {
 	}
 }
 
+func TestRunDeleteCommand(t *testing.T) {
+	dir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer psg_test" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/v1/docs/doc-1" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	if err := config.Save(dir, config.Config{APIURL: server.URL, Token: "psg_test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := runCommand(t, []string{"delete", "doc-1"}, dir, server.Client())
+	if strings.TrimSpace(out) != "Deleted doc-1" {
+		t.Fatalf("delete output = %s", out)
+	}
+
+	jsonOut := runCommand(t, []string{"delete", "--json", "doc-1"}, dir, server.Client())
+	var parsed struct {
+		Deleted bool   `json:"deleted"`
+		DocID   string `json:"doc_id"`
+	}
+	if err := json.Unmarshal([]byte(jsonOut), &parsed); err != nil {
+		t.Fatalf("invalid json %q: %v", jsonOut, err)
+	}
+	if !parsed.Deleted || parsed.DocID != "doc-1" {
+		t.Fatalf("parsed = %#v", parsed)
+	}
+}
+
+func TestRunDeleteCommandReportsUsageAndAPIErrors(t *testing.T) {
+	t.Run("missing document", func(t *testing.T) {
+		var stderr bytes.Buffer
+		code := RunWithRuntime([]string{"delete"}, Runtime{
+			Stdout:    io.Discard,
+			Stderr:    &stderr,
+			ConfigDir: t.TempDir(),
+			Env:       map[string]string{},
+		})
+		if code != 1 || !strings.Contains(stderr.String(), "usage: passage delete [--json] <doc>") {
+			t.Fatalf("code = %d, stderr = %s", code, stderr.String())
+		}
+	})
+
+	t.Run("shared document", func(t *testing.T) {
+		dir := t.TempDir()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_, _ = io.WriteString(w, `{"error":"unshare this document before deleting it"}`)
+		}))
+		defer server.Close()
+		if err := config.Save(dir, config.Config{APIURL: server.URL, Token: "psg_test"}); err != nil {
+			t.Fatal(err)
+		}
+
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		code := RunWithRuntime([]string{"delete", "doc-1"}, Runtime{
+			Stdout:    &stdout,
+			Stderr:    &stderr,
+			ConfigDir: dir,
+			Env:       map[string]string{},
+			HTTP:      server.Client(),
+		})
+		if code != 1 || !strings.Contains(stderr.String(), "unshare this document before deleting it") {
+			t.Fatalf("code = %d, stderr = %s", code, stderr.String())
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("stdout = %s", stdout.String())
+		}
+	})
+}
+
 func TestRunSharingCommands(t *testing.T) {
 	dir := t.TempDir()
 	var requests []string

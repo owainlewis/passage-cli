@@ -91,6 +91,8 @@ func RunWithRuntime(args []string, rt Runtime) int {
 		return runReplace(args[0], args[1:], rt)
 	case "append":
 		return runAppend(args[1:], rt)
+	case "delete":
+		return runDelete(args[1:], rt)
 	case "share":
 		return runShare(args[1:], rt)
 	case "raw":
@@ -235,6 +237,28 @@ func runAppend(args []string, rt Runtime) int {
 		return 1
 	}
 	return printDocumentResult(rt.Stdout, doc, jsonOut, "Updated")
+}
+
+func runDelete(args []string, rt Runtime) int {
+	jsonOut, args := parseJSONFlag(args)
+	if len(args) != 1 {
+		fmt.Fprintf(rt.Stderr, "%s: usage: passage delete [--json] <doc>\n", appName)
+		return 1
+	}
+	client, err := documentClient(rt)
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	if err := client.Delete(args[0]); err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	if jsonOut {
+		return printJSON(rt.Stdout, map[string]any{"deleted": true, "doc_id": args[0]})
+	}
+	fmt.Fprintf(rt.Stdout, "Deleted %s\n", args[0])
+	return 0
 }
 
 func runShare(args []string, rt Runtime) int {
@@ -515,6 +539,7 @@ Commands:
   push      Replace a document body from a file.
   append    Append file content to a document.
   replace   Replace a document body from a file.
+  delete    Delete a document.
   share     Share a document and print public URLs.
   raw       Share a document and print the raw Markdown URL.
   unshare   Revoke public access for a document.
