@@ -70,6 +70,10 @@ func RunWithRuntime(args []string, rt Runtime) int {
 		printHelp(rt.Stdout)
 		return 0
 	}
+	if hasHelpFlag(args[1:]) {
+		printHelp(rt.Stdout)
+		return 0
+	}
 
 	switch args[0] {
 	case "help", "-h", "--help":
@@ -107,6 +111,15 @@ func RunWithRuntime(args []string, rt Runtime) int {
 		fmt.Fprintf(rt.Stderr, "Run `%s help` for usage.\n", appName)
 		return 1
 	}
+}
+
+func hasHelpFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
 }
 
 func runNew(args []string, rt Runtime) int {
