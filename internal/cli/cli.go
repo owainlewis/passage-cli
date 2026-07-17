@@ -115,7 +115,7 @@ func RunWithRuntime(args []string, rt Runtime) int {
 
 func isKnownCommand(command string) bool {
 	switch command {
-	case "help", "-h", "--help", "login", "auth", "new", "list", "cat", "pull", "push", "replace", "append", "share", "raw", "unshare", "version", "-v", "--version":
+	case "help", "-h", "--help", "login", "auth", "new", "list", "cat", "pull", "push", "replace", "append", "delete", "share", "raw", "unshare", "version", "-v", "--version":
 		return true
 	default:
 		return false
