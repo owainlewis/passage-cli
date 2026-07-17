@@ -31,6 +31,69 @@ func TestRunShowsHelpByDefault(t *testing.T) {
 	}
 }
 
+func TestRunSubcommandShowsHelpWithoutRequest(t *testing.T) {
+	for _, command := range []string{"new", "delete"} {
+		for _, helpFlag := range []string{"-h", "--help"} {
+			t.Run(command+"/"+helpFlag, func(t *testing.T) {
+				requests := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					requests++
+					w.WriteHeader(http.StatusInternalServerError)
+				}))
+				defer server.Close()
+
+				var stdout bytes.Buffer
+				var stderr bytes.Buffer
+				code := RunWithRuntime([]string{command, helpFlag}, Runtime{
+					Stdout:    &stdout,
+					Stderr:    &stderr,
+					ConfigDir: t.TempDir(),
+					Env: map[string]string{
+						"PASSAGE_API_URL": server.URL,
+						"PASSAGE_TOKEN":   "psg_testtoken",
+					},
+					HTTP:  server.Client(),
+					Build: BuildInfo{Version: "test"},
+				})
+
+				if code != 0 {
+					t.Fatalf("code = %d, stderr = %s", code, stderr.String())
+				}
+				if !strings.Contains(stdout.String(), "Usage:") {
+					t.Fatalf("stdout = %q", stdout.String())
+				}
+				if stderr.Len() != 0 {
+					t.Fatalf("stderr = %q", stderr.String())
+				}
+				if requests != 0 {
+					t.Fatalf("requests = %d, want 0", requests)
+				}
+			})
+		}
+	}
+}
+
+func TestRunUnknownCommandWithHelpReturnsError(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := RunWithRuntime([]string{"nwe", "--help"}, Runtime{
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Build:  BuildInfo{Version: "test"},
+	})
+
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), `unknown command "nwe"`) {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
 func TestRunLoginSavesConfigAndRedactsToken(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

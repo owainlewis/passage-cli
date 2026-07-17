@@ -70,6 +70,10 @@ func RunWithRuntime(args []string, rt Runtime) int {
 		printHelp(rt.Stdout)
 		return 0
 	}
+	if isKnownCommand(args[0]) && hasHelpFlag(args[1:]) {
+		printHelp(rt.Stdout)
+		return 0
+	}
 
 	switch args[0] {
 	case "help", "-h", "--help":
@@ -107,6 +111,24 @@ func RunWithRuntime(args []string, rt Runtime) int {
 		fmt.Fprintf(rt.Stderr, "Run `%s help` for usage.\n", appName)
 		return 1
 	}
+}
+
+func isKnownCommand(command string) bool {
+	switch command {
+	case "help", "-h", "--help", "login", "auth", "new", "list", "cat", "pull", "push", "replace", "append", "delete", "share", "raw", "unshare", "version", "-v", "--version":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasHelpFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
 }
 
 func runNew(args []string, rt Runtime) int {
