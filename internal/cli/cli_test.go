@@ -71,6 +71,27 @@ func TestRunNewShowsHelpWithoutCreatingDocument(t *testing.T) {
 	}
 }
 
+func TestRunUnknownCommandWithHelpReturnsError(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := RunWithRuntime([]string{"nwe", "--help"}, Runtime{
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Build:  BuildInfo{Version: "test"},
+	})
+
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), `unknown command "nwe"`) {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
 func TestRunLoginSavesConfigAndRedactsToken(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
