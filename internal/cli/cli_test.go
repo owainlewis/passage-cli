@@ -32,7 +32,7 @@ func TestRunShowsHelpByDefault(t *testing.T) {
 }
 
 func TestRunSubcommandShowsHelpWithoutRequest(t *testing.T) {
-	for _, command := range []string{"new", "delete"} {
+	for _, command := range []string{"new", "delete", "collection", "move", "star", "unstar", "search"} {
 		for _, helpFlag := range []string{"-h", "--help"} {
 			t.Run(command+"/"+helpFlag, func(t *testing.T) {
 				requests := 0
@@ -365,6 +365,239 @@ func TestRunDocumentCommandsJSON(t *testing.T) {
 	}
 }
 
+func TestRunCollectionCommandsPlainAndJSON(t *testing.T) {
+	dir := t.TempDir()
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Header.Get("Authorization") != "Bearer psg_test" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/collections":
+			_, _ = io.WriteString(w, `{"collections":[{"id":"collection-default","slug":"operating-context","title":"Operating Context","description":"Goals and rules","createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"},{"id":"collection-custom","slug":"custom","title":"Custom","description":"Old","createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}]}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/collections":
+			var input struct {
+				Title       string  `json:"title"`
+				Description *string `json:"description"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Fatal(err)
+			}
+			if input.Title != "Customer Research" || input.Description == nil || *input.Description != "Interviews" {
+				t.Fatalf("create input = %#v", input)
+			}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{"id":"collection-new","slug":"customer-research","title":"Customer Research","description":"Interviews","createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}`)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/collections/custom":
+			var input struct {
+				Title       string  `json:"title"`
+				Description *string `json:"description"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Fatal(err)
+			}
+			if input.Title != "Renamed" || input.Description == nil || *input.Description != "Old" {
+				t.Fatalf("update input = %#v", input)
+			}
+			_, _ = io.WriteString(w, `{"id":"collection-custom","slug":"custom","title":"Renamed","description":"Old","createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:01:00Z"}`)
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/collections/custom":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+	if err := config.Save(dir, config.Config{APIURL: server.URL, Token: "psg_test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	plain := runCommand(t, []string{"collection", "list"}, dir, server.Client())
+	if plain != "operating-context\tOperating Context\tGoals and rules\ncustom\tCustom\tOld\n" {
+		t.Fatalf("list output = %q", plain)
+	}
+	listJSON := runCommand(t, []string{"collection", "list", "--json"}, dir, server.Client())
+	var listed struct {
+		Collections []struct {
+			ID   string `json:"id"`
+			Slug string `json:"slug"`
+		} `json:"collections"`
+	}
+	if err := json.Unmarshal([]byte(listJSON), &listed); err != nil || len(listed.Collections) != 2 || listed.Collections[0].ID == "" {
+		t.Fatalf("collection JSON = %q, parsed = %#v, err = %v", listJSON, listed, err)
+	}
+	createdJSON := runCommand(t, []string{"collection", "create", "Customer Research", "--description", "Interviews", "--json"}, dir, server.Client())
+	var created struct {
+		ID        string `json:"id"`
+		Slug      string `json:"slug"`
+		CreatedAt string `json:"createdAt"`
+	}
+	if err := json.Unmarshal([]byte(createdJSON), &created); err != nil || created.ID != "collection-new" || created.Slug != "customer-research" || created.CreatedAt == "" {
+		t.Fatalf("create JSON = %q, parsed = %#v, err = %v", createdJSON, created, err)
+	}
+	updated := runCommand(t, []string{"collection", "update", "custom", "--title", "Renamed"}, dir, server.Client())
+	if strings.TrimSpace(updated) != "Updated custom\tRenamed" {
+		t.Fatalf("update output = %q", updated)
+	}
+
+	beforeCancel := requests
+	var cancelOut bytes.Buffer
+	var cancelErr bytes.Buffer
+	code := RunWithRuntime([]string{"collection", "delete", "custom"}, Runtime{
+		Stdin: strings.NewReader("n\n"), Stdout: &cancelOut, Stderr: &cancelErr,
+		ConfigDir: dir, Env: map[string]string{}, HTTP: server.Client(),
+	})
+	if code != 0 || cancelOut.Len() != 0 || !strings.Contains(cancelErr.String(), "Deletion cancelled") || requests != beforeCancel {
+		t.Fatalf("cancel code/out/err/requests = %d/%q/%q/%d", code, cancelOut.String(), cancelErr.String(), requests)
+	}
+	deleted := runCommand(t, []string{"collection", "delete", "custom", "--yes"}, dir, server.Client())
+	if strings.TrimSpace(deleted) != "Deleted collection custom" {
+		t.Fatalf("delete output = %q", deleted)
+	}
+}
+
+func TestRunScopedListMoveStarAndSearch(t *testing.T) {
+	dir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/collections":
+			_, _ = io.WriteString(w, `{"collections":[{"id":"collection-1","slug":"operating-context","title":"Operating Context","description":null,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}]}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/docs":
+			if r.URL.Query().Get("limit") != "100" {
+				t.Fatalf("list query = %s", r.URL.RawQuery)
+			}
+			_, _ = io.WriteString(w, `{"documents":[{"id":"doc-collected","publicId":"public-collected","title":"Collected\nTitle","excerpt":"# Collected","tags":["agents"],"collectionId":"collection-1","collectionSlug":"operating-context","starred":true,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:01:00Z"},{"id":"doc-unfiled","publicId":"public-unfiled","title":"Unfiled","excerpt":"# Unfiled","tags":[],"collectionId":null,"collectionSlug":null,"starred":false,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}]}`)
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/v1/docs/"):
+			var input map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Fatal(err)
+			}
+			collectionID := any(nil)
+			collectionSlug := any(nil)
+			starred := false
+			if value, ok := input["collectionId"]; ok && value != nil {
+				collectionID = value
+				collectionSlug = "operating-context"
+			}
+			if value, ok := input["starred"].(bool); ok {
+				starred = value
+			}
+			response := map[string]any{
+				"id": strings.TrimPrefix(r.URL.Path, "/api/v1/docs/"), "publicId": "public-1", "title": "Agent\tPlan", "body": "# Agent Plan\n",
+				"collectionId": collectionID, "collectionSlug": collectionSlug, "starred": starred,
+				"createdAt": "2026-06-28T12:00:00Z", "updatedAt": "2026-06-28T12:01:00Z",
+			}
+			_ = json.NewEncoder(w).Encode(response)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/docs/search":
+			if r.URL.Query().Get("q") != "agent workflow" {
+				t.Fatalf("search query = %s", r.URL.RawQuery)
+			}
+			if r.URL.Query().Get("collectionId") != "collection-1" && r.URL.Query().Get("unfiled") != "true" {
+				t.Fatalf("search scope = %s", r.URL.RawQuery)
+			}
+			_, _ = io.WriteString(w, `{"documents":[{"id":"doc-search","publicId":"public-search","title":"Agent\nWorkflow","matchExcerpt":"after\nthe first 4 KB","tags":["agents"],"collectionId":"collection-1","collectionSlug":"operating-context","starred":true,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:01:00Z"}]}`)
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+	if err := config.Save(dir, config.Config{APIURL: server.URL, Token: "psg_test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	collected := runCommand(t, []string{"list", "--collection", "operating-context"}, dir, server.Client())
+	if collected != "doc-collected\t2026-06-28 12:01\tCollected Title\n" || strings.Contains(collected, "doc-unfiled") {
+		t.Fatalf("collected output = %q", collected)
+	}
+	unfiledJSON := runCommand(t, []string{"list", "--collection", "documents", "--json"}, dir, server.Client())
+	if !strings.Contains(unfiledJSON, `"id": "doc-unfiled"`) || strings.Contains(unfiledJSON, `"id": "doc-collected"`) || !strings.Contains(unfiledJSON, `"collectionId": null`) {
+		t.Fatalf("unfiled JSON = %q", unfiledJSON)
+	}
+	movedJSON := runCommand(t, []string{"move", "doc-1", "--collection", "operating-context", "--json"}, dir, server.Client())
+	for _, field := range []string{`"id": "doc-1"`, `"publicId": "public-1"`, `"collectionSlug": "operating-context"`, `"starred": false`, `"updatedAt":`} {
+		if !strings.Contains(movedJSON, field) {
+			t.Fatalf("move JSON %q missing %q", movedJSON, field)
+		}
+	}
+	movedDocuments := runCommand(t, []string{"move", "doc-1", "--collection", "documents"}, dir, server.Client())
+	if strings.TrimSpace(movedDocuments) != "Moved doc-1\tdocuments" {
+		t.Fatalf("move Documents output = %q", movedDocuments)
+	}
+	starred := runCommand(t, []string{"star", "doc-1"}, dir, server.Client())
+	if strings.TrimSpace(starred) != "Starred doc-1\tAgent Plan" {
+		t.Fatalf("star output = %q", starred)
+	}
+	unstarredJSON := runCommand(t, []string{"unstar", "doc-1", "--json"}, dir, server.Client())
+	if !strings.Contains(unstarredJSON, `"starred": false`) {
+		t.Fatalf("unstar JSON = %q", unstarredJSON)
+	}
+	searchJSON := runCommand(t, []string{"search", "agent workflow", "--collection", "operating-context", "--limit", "1", "--json"}, dir, server.Client())
+	for _, field := range []string{`"id": "doc-search"`, `"publicId": "public-search"`, `"collectionSlug": "operating-context"`, `"starred": true`, `"matchExcerpt":`} {
+		if !strings.Contains(searchJSON, field) {
+			t.Fatalf("search JSON %q missing %q", searchJSON, field)
+		}
+	}
+	searchPlain := runCommand(t, []string{"search", "agent workflow", "--collection", "documents"}, dir, server.Client())
+	if searchPlain != "doc-search\t2026-06-28 12:01\tAgent Workflow\tafter the first 4 KB\n" {
+		t.Fatalf("search plain = %q", searchPlain)
+	}
+}
+
+func TestRunNewCommandsFollowPagination(t *testing.T) {
+	dir := t.TempDir()
+	var cursors []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		cursor := r.URL.Query().Get("cursor")
+		cursors = append(cursors, r.URL.Path+":"+cursor)
+		switch r.URL.Path {
+		case "/api/v1/collections":
+			if cursor == "collections-next" {
+				_, _ = io.WriteString(w, `{"collections":[{"id":"collection-2","slug":"research","title":"Research","description":null,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}]}`)
+			} else {
+				_, _ = io.WriteString(w, `{"collections":[{"id":"collection-1","slug":"operating-context","title":"Operating Context","description":null,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}],"nextCursor":"collections-next"}`)
+			}
+		case "/api/v1/docs":
+			if cursor == "docs-next" {
+				_, _ = io.WriteString(w, `{"documents":[{"id":"doc-2","publicId":"public-2","title":"Second","excerpt":"Second","tags":[],"collectionId":"collection-1","collectionSlug":"operating-context","starred":false,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}]}`)
+			} else {
+				_, _ = io.WriteString(w, `{"documents":[{"id":"doc-1","publicId":"public-1","title":"First","excerpt":"First","tags":[],"collectionId":"collection-1","collectionSlug":"operating-context","starred":false,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:01:00Z"}],"nextCursor":"docs-next"}`)
+			}
+		case "/api/v1/docs/search":
+			if cursor == "search-next" {
+				_, _ = io.WriteString(w, `{"documents":[{"id":"doc-2","publicId":"public-2","title":"Second","matchExcerpt":"agent","tags":[],"collectionId":null,"collectionSlug":null,"starred":false,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}]}`)
+			} else {
+				_, _ = io.WriteString(w, `{"documents":[{"id":"doc-1","publicId":"public-1","title":"First","matchExcerpt":"agent","tags":[],"collectionId":null,"collectionSlug":null,"starred":false,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:01:00Z"}],"nextCursor":"search-next"}`)
+			}
+		default:
+			t.Fatalf("request = %s", r.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+	if err := config.Save(dir, config.Config{APIURL: server.URL, Token: "psg_test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if out := runCommand(t, []string{"collection", "list"}, dir, server.Client()); !strings.Contains(out, "operating-context") || !strings.Contains(out, "research") {
+		t.Fatalf("collection output = %q", out)
+	}
+	if out := runCommand(t, []string{"list", "--collection", "operating-context"}, dir, server.Client()); !strings.Contains(out, "doc-1") || !strings.Contains(out, "doc-2") {
+		t.Fatalf("list output = %q", out)
+	}
+	if out := runCommand(t, []string{"search", "agent"}, dir, server.Client()); !strings.Contains(out, "doc-1") || !strings.Contains(out, "doc-2") {
+		t.Fatalf("search output = %q", out)
+	}
+	for _, want := range []string{
+		"/api/v1/collections:collections-next", "/api/v1/docs:docs-next", "/api/v1/docs/search:search-next",
+	} {
+		if !containsString(cursors, want) {
+			t.Fatalf("cursors = %#v, missing %q", cursors, want)
+		}
+	}
+}
+
 func TestRunDeleteCommand(t *testing.T) {
 	dir := t.TempDir()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -559,6 +792,159 @@ func TestRunDocumentCommandsReportAPIErrors(t *testing.T) {
 	}
 }
 
+func TestRunNewCommandFailureClasses(t *testing.T) {
+	tests := []struct {
+		name   string
+		args   []string
+		status int
+		body   string
+		want   string
+	}{
+		{name: "validation", args: []string{"collection", "create", "Too long"}, status: http.StatusBadRequest, body: `{"error":"collection title is too long"}`, want: "collection title is too long"},
+		{name: "auth", args: []string{"star", "doc-1"}, status: http.StatusUnauthorized, body: `{"error":"authentication required"}`, want: "authentication required"},
+		{name: "not found", args: []string{"move", "missing", "--collection", "documents"}, status: http.StatusNotFound, body: `{"error":"document not found"}`, want: "document not found"},
+		{name: "conflict limit", args: []string{"collection", "create", "One more"}, status: http.StatusConflict, body: `{"error":"collection limit reached"}`, want: "collection limit reached"},
+		{name: "rate limit", args: []string{"search", "agent"}, status: http.StatusTooManyRequests, body: `{"error":"search rate limit exceeded"}`, want: "search rate limit exceeded"},
+		{name: "server", args: []string{"collection", "list"}, status: http.StatusInternalServerError, body: `{"error":"collections could not be loaded"}`, want: "collections could not be loaded"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer psg_secret_value" {
+					t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(test.status)
+				_, _ = io.WriteString(w, test.body)
+			}))
+			defer server.Close()
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			code := RunWithRuntime(test.args, Runtime{
+				Stdout: &stdout, Stderr: &stderr, ConfigDir: t.TempDir(),
+				Env: map[string]string{"PASSAGE_API_URL": server.URL, "PASSAGE_TOKEN": "psg_secret_value"}, HTTP: server.Client(),
+			})
+			if code == 0 || stdout.Len() != 0 || !strings.Contains(stderr.String(), test.want) {
+				t.Fatalf("code/out/err = %d/%q/%q", code, stdout.String(), stderr.String())
+			}
+			if strings.Contains(stdout.String()+stderr.String(), "psg_secret_value") {
+				t.Fatalf("output leaked token: %q %q", stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunNewCommandsRejectInvalidArgumentsWithoutRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "collection missing subcommand", args: []string{"collection"}},
+		{name: "collection create missing title", args: []string{"collection", "create"}},
+		{name: "collection update missing change", args: []string{"collection", "update", "research"}},
+		{name: "collection delete missing slug", args: []string{"collection", "delete"}},
+		{name: "list missing collection value", args: []string{"list", "--collection"}},
+		{name: "move missing collection", args: []string{"move", "doc-1"}},
+		{name: "star missing document", args: []string{"star"}},
+		{name: "unstar extra argument", args: []string{"unstar", "doc-1", "extra"}},
+		{name: "search missing query", args: []string{"search"}},
+		{name: "search invalid limit", args: []string{"search", "agent", "--limit", "0"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+			}))
+			defer server.Close()
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			code := RunWithRuntime(test.args, Runtime{
+				Stdout: &stdout, Stderr: &stderr, ConfigDir: t.TempDir(),
+				Env: map[string]string{"PASSAGE_API_URL": server.URL, "PASSAGE_TOKEN": "psg_test"}, HTTP: server.Client(),
+			})
+			if code == 0 || stdout.Len() != 0 || stderr.Len() == 0 || requests != 0 {
+				t.Fatalf("code/out/err/requests = %d/%q/%q/%d", code, stdout.String(), stderr.String(), requests)
+			}
+		})
+	}
+}
+
+func TestRunCollectionLookupReportsMissingSlug(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"collections":[]}`)
+	}))
+	defer server.Close()
+	for _, args := range [][]string{
+		{"collection", "update", "missing", "--title", "New"},
+		{"move", "doc-1", "--collection", "missing"},
+		{"search", "agent", "--collection", "missing"},
+		{"list", "--collection", "missing"},
+	} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		code := RunWithRuntime(args, Runtime{
+			Stdout: &stdout, Stderr: &stderr, ConfigDir: t.TempDir(),
+			Env: map[string]string{"PASSAGE_API_URL": server.URL, "PASSAGE_TOKEN": "psg_test"}, HTTP: server.Client(),
+		})
+		if code == 0 || stdout.Len() != 0 || !strings.Contains(stderr.String(), `collection "missing" not found`) {
+			t.Fatalf("%v code/out/err = %d/%q/%q", args, code, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestRunPushReplaceAndAppendReadStdinWithoutChangingMarkdown(t *testing.T) {
+	dir := t.TempDir()
+	var patches []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = io.WriteString(w, `{"id":"doc-1","publicId":"public-1","title":"Existing","body":"Existing","collectionId":null,"collectionSlug":null,"starred":false,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}`)
+		case http.MethodPatch:
+			var input map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Fatal(err)
+			}
+			patches = append(patches, input["body"])
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "doc-1", "publicId": "public-1", "title": "Updated", "body": input["body"],
+				"collectionId": nil, "collectionSlug": nil, "starred": false,
+				"createdAt": "2026-06-28T12:00:00Z", "updatedAt": "2026-06-28T12:01:00Z",
+			})
+		default:
+			t.Fatalf("request = %s", r.Method)
+		}
+	}))
+	defer server.Close()
+	if err := config.Save(dir, config.Config{APIURL: server.URL, Token: "psg_test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		command string
+		stdin   string
+	}{
+		{command: "push", stdin: "# Pushed\n\nExact body.\n"},
+		{command: "replace", stdin: "# Replaced\n\nExact body.\n"},
+		{command: "append", stdin: "More\n"},
+	} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		code := RunWithRuntime([]string{test.command, "doc-1", "-"}, Runtime{
+			Stdin: strings.NewReader(test.stdin), Stdout: &stdout, Stderr: &stderr,
+			ConfigDir: dir, Env: map[string]string{}, HTTP: server.Client(),
+		})
+		if code != 0 || stderr.Len() != 0 {
+			t.Fatalf("%s code/err = %d/%q", test.command, code, stderr.String())
+		}
+	}
+	want := []string{"# Pushed\n\nExact body.\n", "# Replaced\n\nExact body.\n", "Existing\nMore\n"}
+	if strings.Join(patches, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("patches = %#v", patches)
+	}
+}
+
 func runCommand(t *testing.T, args []string, dir string, client *http.Client) string {
 	t.Helper()
 	var stdout bytes.Buffer
@@ -575,6 +961,15 @@ func runCommand(t *testing.T, args []string, dir string, client *http.Client) st
 		t.Fatalf("%v code = %d, stderr = %s", args, code, stderr.String())
 	}
 	return stdout.String()
+}
+
+func containsString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunShowsVersion(t *testing.T) {

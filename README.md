@@ -12,7 +12,7 @@ The app and API server live in the private `owainlewis/passage.md` repo.
 
 This is an early Phase 2 CLI.
 
-It currently supports local auth config, document commands, sharing commands, help, and version output.
+It supports local auth config, document and sharing commands, persisted collections, stars, and full-text search.
 
 ## Install
 
@@ -71,6 +71,12 @@ Run locally:
 ./passage auth status --check
 ./passage new "Draft"
 ./passage list
+./passage collection list
+./passage collection create "Customer Research" --description "Interview notes and findings."
+./passage list --collection customer-research
+./passage move <doc-id> --collection customer-research
+./passage star <doc-id>
+./passage search "agent workflow" --collection customer-research
 ./passage cat <doc-id>
 ./passage pull <doc-id>
 ./passage push <doc-id> ./draft.md
@@ -95,6 +101,9 @@ Use `--json` with document commands when scripts need structured output:
 
 ```sh
 ./passage list --json
+./passage collection list --json
+./passage list --collection operating-context --json
+./passage search "agent workflow" --json
 ./passage cat --json <doc-id>
 ./passage delete --json <doc-id>
 ./passage share --json <doc-id>
@@ -113,6 +122,15 @@ passage auth status
 passage auth status --check
 passage new "Draft"
 passage list
+passage collection list
+passage collection create "Customer Research" --description "Interview notes and findings."
+passage collection update customer-research --title "Product Research"
+passage collection delete customer-research
+passage list --collection <slug|documents>
+passage move <doc-id> --collection <slug|documents>
+passage star <doc-id>
+passage unstar <doc-id>
+passage search "agent workflow" [--collection <slug|documents>] [--limit <n>]
 passage cat <doc-id>
 passage pull <doc-id>
 passage push <doc-id> <file>
@@ -125,6 +143,16 @@ passage unshare <doc-id>
 passage help
 passage version
 passage --version
+```
+
+Collection slugs are stable identifiers returned by `passage collection list`. Use the special slug `documents` to list unfiled documents or move a document back to the built-in Documents view.
+
+`passage search` searches complete Markdown bodies, not only list excerpts. Add `--json` to any collection, scoped list, move, star, unstar, or search command that supports structured output.
+
+Use `-` in place of a file to read Markdown from standard input:
+
+```sh
+printf '# Revised\n' | passage push <doc-id> -
 ```
 
 ## Releases

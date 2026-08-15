@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -18,14 +19,57 @@ type Client struct {
 }
 
 type Document struct {
-	ID         string     `json:"id"`
-	Title      string     `json:"title"`
-	Body       string     `json:"body"`
-	ShareToken *string    `json:"shareToken,omitempty"`
-	SharedAt   *time.Time `json:"sharedAt,omitempty"`
-	CreatedAt  time.Time  `json:"createdAt"`
-	UpdatedAt  time.Time  `json:"updatedAt"`
-	ArchivedAt *time.Time `json:"archivedAt,omitempty"`
+	ID             string     `json:"id"`
+	PublicID       string     `json:"publicId"`
+	Title          string     `json:"title"`
+	Body           string     `json:"body"`
+	CollectionID   *string    `json:"collectionId"`
+	CollectionSlug *string    `json:"collectionSlug"`
+	Starred        bool       `json:"starred"`
+	ShareToken     *string    `json:"shareToken,omitempty"`
+	SharedAt       *time.Time `json:"sharedAt,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+	ArchivedAt     *time.Time `json:"archivedAt,omitempty"`
+}
+
+type DocumentMetadata struct {
+	ID             string     `json:"id"`
+	PublicID       string     `json:"publicId"`
+	Title          string     `json:"title"`
+	Excerpt        string     `json:"excerpt"`
+	Tags           []string   `json:"tags"`
+	CollectionID   *string    `json:"collectionId"`
+	CollectionSlug *string    `json:"collectionSlug"`
+	Starred        bool       `json:"starred"`
+	ShareToken     *string    `json:"shareToken,omitempty"`
+	SharedAt       *time.Time `json:"sharedAt,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+}
+
+type SearchResult struct {
+	ID             string     `json:"id"`
+	PublicID       string     `json:"publicId"`
+	Title          string     `json:"title"`
+	MatchExcerpt   string     `json:"matchExcerpt"`
+	Tags           []string   `json:"tags"`
+	CollectionID   *string    `json:"collectionId"`
+	CollectionSlug *string    `json:"collectionSlug"`
+	Starred        bool       `json:"starred"`
+	ShareToken     *string    `json:"shareToken,omitempty"`
+	SharedAt       *time.Time `json:"sharedAt,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+}
+
+type Collection struct {
+	ID          string    `json:"id"`
+	Slug        string    `json:"slug"`
+	Title       string    `json:"title"`
+	Description *string   `json:"description"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 type Share struct {
@@ -47,6 +91,147 @@ func (c Client) List() ([]Document, error) {
 	return out.Documents, nil
 }
 
+func (c Client) ListMetadata() ([]DocumentMetadata, error) {
+	var documents []DocumentMetadata
+	cursor := ""
+	seen := map[string]bool{}
+	for {
+		query := url.Values{"limit": {"100"}}
+		if cursor != "" {
+			query.Set("cursor", cursor)
+		}
+		var page struct {
+			Documents  []DocumentMetadata `json:"documents"`
+			NextCursor string             `json:"nextCursor"`
+		}
+		if err := c.do(http.MethodGet, "/api/v1/docs?"+query.Encode(), nil, &page); err != nil {
+			return nil, err
+		}
+		documents = append(documents, page.Documents...)
+		if page.NextCursor == "" {
+			break
+		}
+		if seen[page.NextCursor] {
+			return nil, errors.New("server repeated a document cursor")
+		}
+		seen[page.NextCursor] = true
+		cursor = page.NextCursor
+	}
+	if documents == nil {
+		documents = []DocumentMetadata{}
+	}
+	return documents, nil
+}
+
+func (c Client) ListCollections() ([]Collection, error) {
+	var collections []Collection
+	path := "/api/v1/collections"
+	seen := map[string]bool{}
+	for {
+		var page struct {
+			Collections []Collection `json:"collections"`
+			NextCursor  string       `json:"nextCursor"`
+		}
+		if err := c.do(http.MethodGet, path, nil, &page); err != nil {
+			return nil, err
+		}
+		collections = append(collections, page.Collections...)
+		if page.NextCursor == "" {
+			break
+		}
+		if seen[page.NextCursor] {
+			return nil, errors.New("server repeated a collection cursor")
+		}
+		seen[page.NextCursor] = true
+		path = "/api/v1/collections?" + url.Values{"cursor": {page.NextCursor}}.Encode()
+	}
+	if collections == nil {
+		collections = []Collection{}
+	}
+	return collections, nil
+}
+
+func (c Client) CreateCollection(title string, description *string) (Collection, error) {
+	var collection Collection
+	err := c.do(http.MethodPost, "/api/v1/collections", map[string]any{
+		"title": title, "description": description,
+	}, &collection)
+	return collection, err
+}
+
+func (c Client) UpdateCollection(slug string, title string, description *string) (Collection, error) {
+	var collection Collection
+	err := c.do(http.MethodPatch, "/api/v1/collections/"+url.PathEscape(slug), map[string]any{
+		"title": title, "description": description,
+	}, &collection)
+	return collection, err
+}
+
+func (c Client) DeleteCollection(slug string) error {
+	return c.do(http.MethodDelete, "/api/v1/collections/"+url.PathEscape(slug), nil, nil)
+}
+
+func (c Client) Move(id string, collectionID *string) (Document, error) {
+	var doc Document
+	err := c.do(http.MethodPatch, "/api/v1/docs/"+url.PathEscape(id), map[string]any{
+		"collectionId": collectionID,
+	}, &doc)
+	return doc, err
+}
+
+func (c Client) SetStarred(id string, starred bool) (Document, error) {
+	var doc Document
+	err := c.do(http.MethodPatch, "/api/v1/docs/"+url.PathEscape(id), map[string]any{
+		"starred": starred,
+	}, &doc)
+	return doc, err
+}
+
+func (c Client) Search(query string, collectionID *string, unfiled bool, limit int) ([]SearchResult, error) {
+	var results []SearchResult
+	cursor := ""
+	seen := map[string]bool{}
+	for limit <= 0 || len(results) < limit {
+		pageSize := 100
+		if limit > 0 && limit-len(results) < pageSize {
+			pageSize = limit - len(results)
+		}
+		values := url.Values{
+			"q":     {query},
+			"limit": {fmt.Sprintf("%d", pageSize)},
+		}
+		if collectionID != nil {
+			values.Set("collectionId", *collectionID)
+		}
+		if unfiled {
+			values.Set("unfiled", "true")
+		}
+		if cursor != "" {
+			values.Set("cursor", cursor)
+		}
+		var page struct {
+			Documents  []SearchResult `json:"documents"`
+			NextCursor string         `json:"nextCursor"`
+		}
+		if err := c.do(http.MethodGet, "/api/v1/docs/search?"+values.Encode(), nil, &page); err != nil {
+			return nil, err
+		}
+		results = append(results, page.Documents...)
+		if page.NextCursor == "" {
+			break
+		}
+		if seen[page.NextCursor] {
+			return nil, errors.New("server repeated a search cursor")
+		}
+		seen[page.NextCursor] = true
+		cursor = page.NextCursor
+	}
+	if results == nil {
+		results = []SearchResult{}
+	}
+	return results, nil
+}
+
 func (c Client) Create(body string) (Document, error) {
 	var doc Document
 	err := c.do(http.MethodPost, "/api/v1/docs", map[string]string{"body": body}, &doc)
@@ -55,28 +240,28 @@ func (c Client) Create(body string) (Document, error) {
 
 func (c Client) Get(id string) (Document, error) {
 	var doc Document
-	err := c.do(http.MethodGet, "/api/v1/docs/"+id, nil, &doc)
+	err := c.do(http.MethodGet, "/api/v1/docs/"+url.PathEscape(id), nil, &doc)
 	return doc, err
 }
 
 func (c Client) Update(id string, body string) (Document, error) {
 	var doc Document
-	err := c.do(http.MethodPatch, "/api/v1/docs/"+id, map[string]string{"body": body}, &doc)
+	err := c.do(http.MethodPatch, "/api/v1/docs/"+url.PathEscape(id), map[string]string{"body": body}, &doc)
 	return doc, err
 }
 
 func (c Client) Delete(id string) error {
-	return c.do(http.MethodDelete, "/api/v1/docs/"+id, nil, nil)
+	return c.do(http.MethodDelete, "/api/v1/docs/"+url.PathEscape(id), nil, nil)
 }
 
 func (c Client) Share(id string) (Share, error) {
 	var share Share
-	err := c.do(http.MethodPost, "/api/v1/docs/"+id+"/share", nil, &share)
+	err := c.do(http.MethodPost, "/api/v1/docs/"+url.PathEscape(id)+"/share", nil, &share)
 	return share, err
 }
 
 func (c Client) Unshare(id string) error {
-	return c.do(http.MethodDelete, "/api/v1/docs/"+id+"/share", nil, nil)
+	return c.do(http.MethodDelete, "/api/v1/docs/"+url.PathEscape(id)+"/share", nil, nil)
 }
 
 func (c Client) do(method string, path string, input any, output any) error {
