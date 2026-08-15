@@ -203,7 +203,7 @@ func runList(args []string, rt Runtime) int {
 			return printJSON(rt.Stdout, map[string][]api.DocumentMetadata{"documents": filtered})
 		}
 		for _, doc := range filtered {
-			fmt.Fprintf(rt.Stdout, "%s\t%s\t%s\n", doc.ID, doc.UpdatedAt.Format("2006-01-02 15:04"), doc.Title)
+			fmt.Fprintf(rt.Stdout, "%s\t%s\t%s\n", doc.ID, doc.UpdatedAt.Format("2006-01-02 15:04"), singleLine(doc.Title))
 		}
 		return 0
 	}
@@ -446,7 +446,7 @@ func runStar(args []string, rt Runtime, starred bool) int {
 	if !starred {
 		verb = "Unstarred"
 	}
-	fmt.Fprintf(rt.Stdout, "%s %s\t%s\n", verb, doc.ID, doc.Title)
+	fmt.Fprintf(rt.Stdout, "%s %s\t%s\n", verb, doc.ID, singleLine(doc.Title))
 	return 0
 }
 

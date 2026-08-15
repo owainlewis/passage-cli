@@ -468,7 +468,7 @@ func TestRunScopedListMoveStarAndSearch(t *testing.T) {
 			if r.URL.Query().Get("limit") != "100" {
 				t.Fatalf("list query = %s", r.URL.RawQuery)
 			}
-			_, _ = io.WriteString(w, `{"documents":[{"id":"doc-collected","publicId":"public-collected","title":"Collected","excerpt":"# Collected","tags":["agents"],"collectionId":"collection-1","collectionSlug":"operating-context","starred":true,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:01:00Z"},{"id":"doc-unfiled","publicId":"public-unfiled","title":"Unfiled","excerpt":"# Unfiled","tags":[],"collectionId":null,"collectionSlug":null,"starred":false,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}]}`)
+			_, _ = io.WriteString(w, `{"documents":[{"id":"doc-collected","publicId":"public-collected","title":"Collected\nTitle","excerpt":"# Collected","tags":["agents"],"collectionId":"collection-1","collectionSlug":"operating-context","starred":true,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:01:00Z"},{"id":"doc-unfiled","publicId":"public-unfiled","title":"Unfiled","excerpt":"# Unfiled","tags":[],"collectionId":null,"collectionSlug":null,"starred":false,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}]}`)
 		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/v1/docs/"):
 			var input map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -485,7 +485,7 @@ func TestRunScopedListMoveStarAndSearch(t *testing.T) {
 				starred = value
 			}
 			response := map[string]any{
-				"id": strings.TrimPrefix(r.URL.Path, "/api/v1/docs/"), "publicId": "public-1", "title": "Agent Plan", "body": "# Agent Plan\n",
+				"id": strings.TrimPrefix(r.URL.Path, "/api/v1/docs/"), "publicId": "public-1", "title": "Agent\tPlan", "body": "# Agent Plan\n",
 				"collectionId": collectionID, "collectionSlug": collectionSlug, "starred": starred,
 				"createdAt": "2026-06-28T12:00:00Z", "updatedAt": "2026-06-28T12:01:00Z",
 			}
@@ -508,7 +508,7 @@ func TestRunScopedListMoveStarAndSearch(t *testing.T) {
 	}
 
 	collected := runCommand(t, []string{"list", "--collection", "operating-context"}, dir, server.Client())
-	if !strings.Contains(collected, "doc-collected") || strings.Contains(collected, "doc-unfiled") {
+	if collected != "doc-collected\t2026-06-28 12:01\tCollected Title\n" || strings.Contains(collected, "doc-unfiled") {
 		t.Fatalf("collected output = %q", collected)
 	}
 	unfiledJSON := runCommand(t, []string{"list", "--collection", "documents", "--json"}, dir, server.Client())
