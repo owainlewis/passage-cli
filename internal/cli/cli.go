@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/owainlewis/passage-cli/internal/api"
 	"github.com/owainlewis/passage-cli/internal/config"
@@ -541,7 +542,12 @@ func runReplace(command string, args []string, rt Runtime) int {
 		printCommandError(rt.Stderr, err)
 		return 1
 	}
-	doc, err := client.Update(args[0], string(body))
+	existing, err := client.Get(args[0])
+	if err != nil {
+		printCommandError(rt.Stderr, err)
+		return 1
+	}
+	doc, err := client.UpdateAtVersion(args[0], string(body), existing.Version)
 	if err != nil {
 		printCommandError(rt.Stderr, err)
 		return 1
@@ -575,7 +581,7 @@ func runAppend(args []string, rt Runtime) int {
 		body += "\n"
 	}
 	body += string(addition)
-	doc, err := client.Update(args[0], body)
+	doc, err := client.UpdateAtVersion(args[0], body, existing.Version)
 	if err != nil {
 		printCommandError(rt.Stderr, err)
 		return 1
@@ -827,6 +833,15 @@ func printJSON(w io.Writer, value any) int {
 func printCommandError(w io.Writer, err error) {
 	if err.Error() == "not authenticated" {
 		fmt.Fprintln(w, "Not authenticated. Run `passage login` or set PASSAGE_TOKEN.")
+		return
+	}
+	var conflict *api.ConflictError
+	if errors.As(err, &conflict) {
+		// Say what happened and hand back control. Retrying here would be a
+		// forced overwrite of somebody else's work.
+		fmt.Fprintf(w, "%s: the document changed since it was read, so nothing was written.\n", appName)
+		fmt.Fprintf(w, "It is now at version %d, last updated %s.\n", conflict.Current.Version, conflict.Current.UpdatedAt.Format(time.RFC3339))
+		fmt.Fprintf(w, "Read it again with `passage cat %s`, fold in your change, then write it back.\n", conflict.Current.ID)
 		return
 	}
 	fmt.Fprintf(w, "%s: %v\n", appName, err)

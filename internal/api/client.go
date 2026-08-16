@@ -26,11 +26,23 @@ type Document struct {
 	CollectionID   *string    `json:"collectionId"`
 	CollectionSlug *string    `json:"collectionSlug"`
 	Starred        bool       `json:"starred"`
+	Version        int        `json:"version"`
 	ShareToken     *string    `json:"shareToken,omitempty"`
 	SharedAt       *time.Time `json:"sharedAt,omitempty"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	UpdatedAt      time.Time  `json:"updatedAt"`
 	ArchivedAt     *time.Time `json:"archivedAt,omitempty"`
+}
+
+// ConflictError reports that the document moved on between the read and the
+// write. The caller must not retry with a forced overwrite: that is the
+// silent data loss this whole mechanism exists to prevent.
+type ConflictError struct {
+	Current Document
+}
+
+func (e *ConflictError) Error() string {
+	return "document changed since it was read"
 }
 
 type DocumentMetadata struct {
@@ -244,9 +256,19 @@ func (c Client) Get(id string) (Document, error) {
 	return doc, err
 }
 
+// Update writes unconditionally. Prefer UpdateAtVersion for anything that read
+// the document first.
 func (c Client) Update(id string, body string) (Document, error) {
 	var doc Document
 	err := c.do(http.MethodPatch, "/api/v1/docs/"+url.PathEscape(id), map[string]string{"body": body}, &doc)
+	return doc, err
+}
+
+// UpdateAtVersion writes only if the document is still at version. A mismatch
+// returns *ConflictError carrying the server's current copy.
+func (c Client) UpdateAtVersion(id string, body string, version int) (Document, error) {
+	var doc Document
+	err := c.do(http.MethodPatch, "/api/v1/docs/"+url.PathEscape(id), map[string]any{"body": body, "version": version}, &doc)
 	return doc, err
 }
 
@@ -297,6 +319,15 @@ func (c Client) do(method string, path string, input any, output any) error {
 	data, err := io.ReadAll(res.Body)
 	if err != nil {
 		return err
+	}
+	if res.StatusCode == http.StatusConflict {
+		var conflict struct {
+			Error    string   `json:"error"`
+			Document Document `json:"document"`
+		}
+		if json.Unmarshal(data, &conflict) == nil && conflict.Document.ID != "" {
+			return &ConflictError{Current: conflict.Document}
+		}
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		var apiErr struct {
