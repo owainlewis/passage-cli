@@ -278,14 +278,15 @@ func TestRunDocumentCommands(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/docs/11111111-1111-1111-1111-111111111111":
 			_, _ = io.WriteString(w, `{"id":"11111111-1111-1111-1111-111111111111","title":"Draft","body":"# Draft","createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}`)
 		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/docs/11111111-1111-1111-1111-111111111111":
-			var input map[string]string
+			var input map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(input["body"], "More") && !strings.Contains(input["body"], "Pushed") && !strings.Contains(input["body"], "Replaced") {
-				t.Fatalf("update body = %q", input["body"])
+			body, _ := input["body"].(string)
+			if !strings.Contains(body, "More") && !strings.Contains(body, "Pushed") && !strings.Contains(body, "Replaced") {
+				t.Fatalf("update body = %q", body)
 			}
-			_, _ = io.WriteString(w, `{"id":"11111111-1111-1111-1111-111111111111","title":"Draft","body":"`+strings.ReplaceAll(input["body"], "\n", "\\n")+`","createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:01:00Z"}`)
+			_, _ = io.WriteString(w, `{"id":"11111111-1111-1111-1111-111111111111","title":"Draft","body":"`+strings.ReplaceAll(body, "\n", "\\n")+`","createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:01:00Z"}`)
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
@@ -900,15 +901,20 @@ func TestRunPushReplaceAndAppendReadStdinWithoutChangingMarkdown(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method {
 		case http.MethodGet:
-			_, _ = io.WriteString(w, `{"id":"doc-1","publicId":"public-1","title":"Existing","body":"Existing","collectionId":null,"collectionSlug":null,"starred":false,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}`)
+			_, _ = io.WriteString(w, `{"id":"doc-1","publicId":"public-1","title":"Existing","body":"Existing","version":7,"collectionId":null,"collectionSlug":null,"starred":false,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}`)
 		case http.MethodPatch:
-			var input map[string]string
+			var input map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 				t.Fatal(err)
 			}
-			patches = append(patches, input["body"])
+			body, _ := input["body"].(string)
+			// Every write is conditional on the version the command read.
+			if version, _ := input["version"].(float64); int(version) != 7 {
+				t.Fatalf("patch version = %v, want 7", input["version"])
+			}
+			patches = append(patches, body)
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id": "doc-1", "publicId": "public-1", "title": "Updated", "body": input["body"],
+				"id": "doc-1", "publicId": "public-1", "title": "Updated", "body": body, "version": 8,
 				"collectionId": nil, "collectionSlug": nil, "starred": false,
 				"createdAt": "2026-06-28T12:00:00Z", "updatedAt": "2026-06-28T12:01:00Z",
 			})
@@ -1009,5 +1015,50 @@ func TestRunRejectsUnknownCommand(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), `unknown command "wat"`) {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestRunReplaceReportsConflictWithoutOverwriting(t *testing.T) {
+	dir := t.TempDir()
+	patches := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = io.WriteString(w, `{"id":"doc-1","publicId":"public-1","title":"Shared","body":"# Shared","version":4,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:00:00Z"}`)
+		case http.MethodPatch:
+			patches++
+			w.WriteHeader(http.StatusConflict)
+			_, _ = io.WriteString(w, `{"error":"document changed since it was loaded","document":{"id":"doc-1","publicId":"public-1","title":"Shared","body":"# Shared\n\nsomebody else","version":5,"createdAt":"2026-06-28T12:00:00Z","updatedAt":"2026-06-28T12:05:00Z"}}`)
+		default:
+			t.Fatalf("unexpected request %s", r.Method)
+		}
+	}))
+	defer server.Close()
+	if err := config.Save(dir, config.Config{APIURL: server.URL, Token: "psg_test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := RunWithRuntime([]string{"replace", "doc-1", "-"}, Runtime{
+		Stdin: strings.NewReader("# Shared\n\nmy version\n"), Stdout: &stdout, Stderr: &stderr,
+		ConfigDir: dir, Env: map[string]string{}, HTTP: server.Client(),
+	})
+
+	if code == 0 {
+		t.Fatal("a refused write exited successfully")
+	}
+	if patches != 1 {
+		t.Fatalf("patch attempts = %d, want 1: a conflict must not be retried as a forced overwrite", patches)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want nothing written to stdout", stdout.String())
+	}
+	message := stderr.String()
+	for _, want := range []string{"changed since it was read", "version 5", "passage cat doc-1"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("conflict message = %q, want it to mention %q", message, want)
+		}
 	}
 }
