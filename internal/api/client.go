@@ -19,19 +19,17 @@ type Client struct {
 }
 
 type Document struct {
-	ID             string     `json:"id"`
-	PublicID       string     `json:"publicId"`
-	Title          string     `json:"title"`
-	Body           string     `json:"body"`
-	CollectionID   *string    `json:"collectionId"`
-	CollectionSlug *string    `json:"collectionSlug"`
-	Starred        bool       `json:"starred"`
-	Version        int        `json:"version"`
-	ShareToken     *string    `json:"shareToken,omitempty"`
-	SharedAt       *time.Time `json:"sharedAt,omitempty"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt      time.Time  `json:"updatedAt"`
-	ArchivedAt     *time.Time `json:"archivedAt,omitempty"`
+	ID         string     `json:"id"`
+	PublicID   string     `json:"publicId"`
+	Title      string     `json:"title"`
+	Body       string     `json:"body"`
+	Starred    bool       `json:"starred"`
+	Version    int        `json:"version"`
+	ShareToken *string    `json:"shareToken,omitempty"`
+	SharedAt   *time.Time `json:"sharedAt,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	UpdatedAt  time.Time  `json:"updatedAt"`
+	ArchivedAt *time.Time `json:"archivedAt,omitempty"`
 }
 
 // ConflictError reports that the document moved on between the read and the
@@ -45,43 +43,17 @@ func (e *ConflictError) Error() string {
 	return "document changed since it was read"
 }
 
-type DocumentMetadata struct {
-	ID             string     `json:"id"`
-	PublicID       string     `json:"publicId"`
-	Title          string     `json:"title"`
-	Excerpt        string     `json:"excerpt"`
-	Tags           []string   `json:"tags"`
-	CollectionID   *string    `json:"collectionId"`
-	CollectionSlug *string    `json:"collectionSlug"`
-	Starred        bool       `json:"starred"`
-	ShareToken     *string    `json:"shareToken,omitempty"`
-	SharedAt       *time.Time `json:"sharedAt,omitempty"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt      time.Time  `json:"updatedAt"`
-}
-
 type SearchResult struct {
-	ID             string     `json:"id"`
-	PublicID       string     `json:"publicId"`
-	Title          string     `json:"title"`
-	MatchExcerpt   string     `json:"matchExcerpt"`
-	Tags           []string   `json:"tags"`
-	CollectionID   *string    `json:"collectionId"`
-	CollectionSlug *string    `json:"collectionSlug"`
-	Starred        bool       `json:"starred"`
-	ShareToken     *string    `json:"shareToken,omitempty"`
-	SharedAt       *time.Time `json:"sharedAt,omitempty"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt      time.Time  `json:"updatedAt"`
-}
-
-type Collection struct {
-	ID          string    `json:"id"`
-	Slug        string    `json:"slug"`
-	Title       string    `json:"title"`
-	Description *string   `json:"description"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID           string     `json:"id"`
+	PublicID     string     `json:"publicId"`
+	Title        string     `json:"title"`
+	MatchExcerpt string     `json:"matchExcerpt"`
+	Tags         []string   `json:"tags"`
+	Starred      bool       `json:"starred"`
+	ShareToken   *string    `json:"shareToken,omitempty"`
+	SharedAt     *time.Time `json:"sharedAt,omitempty"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
 }
 
 type Share struct {
@@ -103,94 +75,6 @@ func (c Client) List() ([]Document, error) {
 	return out.Documents, nil
 }
 
-func (c Client) ListMetadata() ([]DocumentMetadata, error) {
-	var documents []DocumentMetadata
-	cursor := ""
-	seen := map[string]bool{}
-	for {
-		query := url.Values{"limit": {"100"}}
-		if cursor != "" {
-			query.Set("cursor", cursor)
-		}
-		var page struct {
-			Documents  []DocumentMetadata `json:"documents"`
-			NextCursor string             `json:"nextCursor"`
-		}
-		if err := c.do(http.MethodGet, "/api/v1/docs?"+query.Encode(), nil, &page); err != nil {
-			return nil, err
-		}
-		documents = append(documents, page.Documents...)
-		if page.NextCursor == "" {
-			break
-		}
-		if seen[page.NextCursor] {
-			return nil, errors.New("server repeated a document cursor")
-		}
-		seen[page.NextCursor] = true
-		cursor = page.NextCursor
-	}
-	if documents == nil {
-		documents = []DocumentMetadata{}
-	}
-	return documents, nil
-}
-
-func (c Client) ListCollections() ([]Collection, error) {
-	var collections []Collection
-	path := "/api/v1/collections"
-	seen := map[string]bool{}
-	for {
-		var page struct {
-			Collections []Collection `json:"collections"`
-			NextCursor  string       `json:"nextCursor"`
-		}
-		if err := c.do(http.MethodGet, path, nil, &page); err != nil {
-			return nil, err
-		}
-		collections = append(collections, page.Collections...)
-		if page.NextCursor == "" {
-			break
-		}
-		if seen[page.NextCursor] {
-			return nil, errors.New("server repeated a collection cursor")
-		}
-		seen[page.NextCursor] = true
-		path = "/api/v1/collections?" + url.Values{"cursor": {page.NextCursor}}.Encode()
-	}
-	if collections == nil {
-		collections = []Collection{}
-	}
-	return collections, nil
-}
-
-func (c Client) CreateCollection(title string, description *string) (Collection, error) {
-	var collection Collection
-	err := c.do(http.MethodPost, "/api/v1/collections", map[string]any{
-		"title": title, "description": description,
-	}, &collection)
-	return collection, err
-}
-
-func (c Client) UpdateCollection(slug string, title string, description *string) (Collection, error) {
-	var collection Collection
-	err := c.do(http.MethodPatch, "/api/v1/collections/"+url.PathEscape(slug), map[string]any{
-		"title": title, "description": description,
-	}, &collection)
-	return collection, err
-}
-
-func (c Client) DeleteCollection(slug string) error {
-	return c.do(http.MethodDelete, "/api/v1/collections/"+url.PathEscape(slug), nil, nil)
-}
-
-func (c Client) Move(id string, collectionID *string) (Document, error) {
-	var doc Document
-	err := c.do(http.MethodPatch, "/api/v1/docs/"+url.PathEscape(id), map[string]any{
-		"collectionId": collectionID,
-	}, &doc)
-	return doc, err
-}
-
 func (c Client) SetStarred(id string, starred bool) (Document, error) {
 	var doc Document
 	err := c.do(http.MethodPatch, "/api/v1/docs/"+url.PathEscape(id), map[string]any{
@@ -199,7 +83,7 @@ func (c Client) SetStarred(id string, starred bool) (Document, error) {
 	return doc, err
 }
 
-func (c Client) Search(query string, collectionID *string, unfiled bool, limit int) ([]SearchResult, error) {
+func (c Client) Search(query string, limit int) ([]SearchResult, error) {
 	var results []SearchResult
 	cursor := ""
 	seen := map[string]bool{}
@@ -211,12 +95,6 @@ func (c Client) Search(query string, collectionID *string, unfiled bool, limit i
 		values := url.Values{
 			"q":     {query},
 			"limit": {fmt.Sprintf("%d", pageSize)},
-		}
-		if collectionID != nil {
-			values.Set("collectionId", *collectionID)
-		}
-		if unfiled {
-			values.Set("unfiled", "true")
 		}
 		if cursor != "" {
 			values.Set("cursor", cursor)
